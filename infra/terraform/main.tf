@@ -20,7 +20,9 @@ resource "digitalocean_project" "this" {
   environment = var.env == "production" ? "Production" : "Staging"
   purpose     = "Web Application"
   resources = concat(
-    [digitalocean_droplet.app.urn],
+    # reserved IP обязан быть в списке: DO привязывает его к проекту дроплета сам,
+    # а без записи здесь терраформ пытается его «убрать» и ловит 412
+    [digitalocean_droplet.app.urn, digitalocean_reserved_ip.app.urn],
     var.managed_db ? [digitalocean_database_cluster.pg[0].urn] : [],
     var.enable_backups_bucket ? [digitalocean_spaces_bucket.backups[0].urn] : [],
   )

@@ -22,7 +22,12 @@ terraform {
 }
 
 # Токены — только из окружения:
-#   DIGITALOCEAN_TOKEN, SPACES_ACCESS_KEY_ID, SPACES_SECRET_ACCESS_KEY, CLOUDFLARE_API_TOKEN
+#   DIGITALOCEAN_TOKEN, SPACES_ACCESS_KEY_ID, SPACES_SECRET_ACCESS_KEY, TF_VAR_cloudflare_api_token
 provider "digitalocean" {}
 
-provider "cloudflare" {}
+# Провайдер конфигурируется даже при нуле ресурсов Cloudflare (сценарий «без домена»)
+# и требует непустой токен. Заглушка безопасна: API-вызовов без ресурсов нет.
+# С доменом реальный токен передаётся через TF_VAR_cloudflare_api_token.
+provider "cloudflare" {
+  api_token = var.cloudflare_api_token
+}

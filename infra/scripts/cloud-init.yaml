@@ -1,5 +1,6 @@
 #cloud-config
-# Bootstrap дроплета. Подставляется terraform (templatefile).
+# Droplet bootstrap. Rendered by terraform (templatefile).
+# ASCII only: non-ASCII bytes break cloud-init YAML parsing on some providers.
 
 package_update: true
 package_upgrade: true
@@ -20,13 +21,13 @@ users:
       - no-agent-forwarding,no-X11-forwarding,no-pty ${ssh_public_key}
 
 write_files:
-  # log rotation для контейнеров
+  # container log rotation
   - path: /etc/docker/daemon.json
     content: |
       { "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "3" } }
 
-  # cron: uptime-ping (pull-модель), pg_dump в Spaces, метрика срока сертификата.
-  # Скрипты приезжают с первым деплоем в /opt/app/scripts — до этого cron молча выходит.
+  # cron: uptime ping (pull model), pg_dump to Spaces, cert expiry metric.
+  # Scripts arrive with the first deploy into /opt/app/scripts; until then cron exits silently.
   - path: /etc/cron.d/app
     content: |
       SHELL=/bin/bash
@@ -37,7 +38,7 @@ write_files:
 runcmd:
   - mkdir -p /opt/app/certs /opt/app/caddy /opt/app/scripts /var/lib/node_exporter/textfile
   - chown -R deploy:deploy /opt/app
-  # swap 2 ГБ — защита от OOM при пиках
+  # 2G swap: OOM protection for load spikes
   - fallocate -l 2G /swapfile
   - chmod 600 /swapfile
   - mkswap /swapfile

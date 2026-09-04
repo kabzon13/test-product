@@ -64,3 +64,10 @@ variable "enable_backups_bucket" {
   default     = true
   description = "Spaces-бакет для pg_dump. Для staging выключен: данные одноразовые"
 }
+
+variable "cloudflare_api_token" {
+  type        = string
+  default     = "dummy00000000000000000000000000000000000"
+  sensitive   = true
+  description = "Нужен только при заданном домене (передавать через TF_VAR_cloudflare_api_token)"
+}
