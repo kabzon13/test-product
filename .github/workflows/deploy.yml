@@ -1,0 +1,124 @@
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Окружение
+        required: true
+        type: choice
+        options: [staging, production]
+      sha:
+        description: git SHA образа (по умолчанию — HEAD main)
+        required: false
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      SHA: ${{ inputs.sha != '' && inputs.sha || github.sha }}
+      DROPLET_IP: ${{ vars.DROPLET_IP }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha != '' && inputs.sha || github.sha }}
+
+      # Инфраструктуры ещё нет (make infra-apply не выполнялся) — деплой мягко
+      # пропускается, а не валит CI. После make sync-secrets появится DROPLET_IP.
+      - name: Guard
+        id: guard
+        run: |
+          if [ -z "$DROPLET_IP" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Окружение «${{ inputs.environment }}» ещё не поднято (нет DROPLET_IP) — деплой пропущен. make infra-apply ENV=${{ inputs.environment }} && make sync-secrets ENV=${{ inputs.environment }}"
+          fi
+
+      - name: Render .env
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/test
+          GIT_SHA: ${{ inputs.sha != '' && inputs.sha || github.sha }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          MIGRATOR_PASSWORD: ${{ secrets.MIGRATOR_PASSWORD }}
+          APP_USER_PASSWORD: ${{ secrets.APP_USER_PASSWORD }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          SPACES_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+          SPACES_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
+          BACKUPS_BUCKET: ${{ vars.BACKUPS_BUCKET }}
+          BACKUPS_ENDPOINT: ${{ vars.BACKUPS_ENDPOINT }}
+          HEALTHCHECKS_URL: ${{ secrets.HEALTHCHECKS_URL }}
+          ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.ALERT_TELEGRAM_BOT_TOKEN }}
+          ALERT_TELEGRAM_CHAT_ID: ${{ secrets.ALERT_TELEGRAM_CHAT_ID }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          STRIPE_PRICE_ID: ${{ secrets.STRIPE_PRICE_ID }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+        run: bash infra/scripts/render-env.sh "${{ inputs.environment }}" > deploy.env
+
+      - name: Origin CA cert
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          ORIGIN_CERT: ${{ secrets.ORIGIN_CERT }}
+          ORIGIN_KEY: ${{ secrets.ORIGIN_KEY }}
+        run: |
+          mkdir -p certs
+          if [ -n "$ORIGIN_CERT" ]; then
+            printf '%s' "$ORIGIN_CERT" > certs/origin.pem
+            printf '%s' "$ORIGIN_KEY" > certs/origin.key
+          fi
+
+      - name: SSH setup
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DROPLET_IP" >> ~/.ssh/known_hosts
+
+      - name: Copy artefacts to server
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          SSH="deploy@$DROPLET_IP"
+          ssh "$SSH" 'mkdir -p /opt/app/caddy /opt/app/observability /opt/app/postgres /opt/app/scripts /opt/app/certs'
+          scp deploy.env "$SSH:/opt/app/.env"
+          ssh "$SSH" 'chmod 600 /opt/app/.env'
+          scp docker-compose.yml "$SSH:/opt/app/docker-compose.yml"
+          scp infra/docker/caddy/Caddyfile.ip infra/docker/caddy/Caddyfile.domain "$SSH:/opt/app/caddy/"
+          scp -r infra/observability/. "$SSH:/opt/app/observability/"
+          scp infra/docker/postgres/init-roles.sh "$SSH:/opt/app/postgres/init-roles.sh"
+          scp infra/scripts/deploy.sh infra/scripts/rollback.sh infra/scripts/smoke.sh "$SSH:/opt/app/scripts/"
+          scp infra/scripts/server/*.sh "$SSH:/opt/app/scripts/"
+          ssh "$SSH" 'chmod +x /opt/app/scripts/*.sh'
+          if [ -f certs/origin.pem ]; then
+            scp certs/origin.pem certs/origin.key "$SSH:/opt/app/certs/"
+            ssh "$SSH" 'chmod 600 /opt/app/certs/*'
+          fi
+
+      - name: Deploy
+        if: steps.guard.outputs.skip != 'true'
+        run: ssh "deploy@$DROPLET_IP" "/opt/app/scripts/deploy.sh $SHA"

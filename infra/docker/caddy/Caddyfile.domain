@@ -1,0 +1,13 @@
+# Основной сайт — добавляется в Caddyfile только если задан APP_DOMAIN.
+# TLS: Cloudflare Origin CA (15 лет), рендерится деплоем в /certs.
+
+{$APP_DOMAIN} {
+	encode gzip
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+	tls /certs/origin.pem /certs/origin.key
+}

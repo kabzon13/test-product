@@ -1,0 +1,24 @@
+{
+  "name": "@test/api-client",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "gen": "openapi-typescript openapi.json -o src/types.ts",
+    "build": "echo 'source package, no build' && exit 0",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo 'no tests' && exit 0"
+  },
+  "dependencies": {
+    "openapi-fetch": "0.13.8"
+  },
+  "devDependencies": {
+    "@test/eslint-config": "workspace:*",
+    "@test/tsconfig": "workspace:*",
+    "eslint": "9.39.5",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

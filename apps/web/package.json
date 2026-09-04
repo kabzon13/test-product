@@ -1,0 +1,31 @@
+{
+  "name": "@test/web",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p ${WEB_PORT:-3000}",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo 'no tests' && exit 0"
+  },
+  "dependencies": {
+    "@test/api-client": "workspace:*",
+    "@sentry/nextjs": "8.55.2",
+    "next": "15.5.23",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "0.0.1",
+    "dotenv": "16.6.1"
+  },
+  "devDependencies": {
+    "@test/eslint-config": "workspace:*",
+    "@test/tsconfig": "workspace:*",
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "eslint": "9.39.5",
+    "typescript": "5.9.3"
+  }
+}

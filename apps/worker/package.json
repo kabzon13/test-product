@@ -1,0 +1,30 @@
+{
+  "name": "@test/worker",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "ts-node -T src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo 'no tests' && exit 0"
+  },
+  "dependencies": {
+    "@test/config": "workspace:*",
+    "dotenv": "16.6.1",
+    "pg-boss": "10.4.2",
+    "pino": "9.14.0"
+  },
+  "devDependencies": {
+    "@test/eslint-config": "workspace:*",
+    "@test/tsconfig": "workspace:*",
+    "@types/node": "22.20.1",
+    "eslint": "9.39.5",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.3"
+  }
+}

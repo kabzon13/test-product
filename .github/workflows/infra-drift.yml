@@ -1,0 +1,51 @@
+name: infra-drift
+
+# Раз в месяц: tofu plan. Есть расхождение (например, сменились IP Cloudflare) —
+# открывается issue.
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [staging, production]
+    environment: ${{ matrix.env }}
+    permissions:
+      contents: read
+      issues: write
+    env:
+      DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+      SPACES_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+      SPACES_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Plan
+        id: plan
+        continue-on-error: true
+        run: |
+          PRODUCT=$(grep -E '^PRODUCT' Makefile | head -1 | awk '{print $3}')
+          cd infra/terraform
+          tofu init -reconfigure \
+            -backend-config=../../deploy/backend.hcl \
+            -backend-config="key=tf-state/$PRODUCT/${{ matrix.env }}.tfstate"
+          tofu plan -detailed-exitcode -input=false \
+            -var-file=../../deploy/environments/${{ matrix.env }}.tfvars \
+            -var "env=${{ matrix.env }}" -var "product=$PRODUCT"
+      - name: Open issue on drift
+        if: steps.plan.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Infra drift: ${{ matrix.env }}" \
+            --body "Ежемесячный tofu plan нашёл расхождение в ${{ matrix.env }}. Смотри run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Обычная причина — обновились диапазоны IP Cloudflare: достаточно make infra-apply ENV=${{ matrix.env }}."

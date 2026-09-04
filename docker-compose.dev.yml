@@ -1,0 +1,241 @@
+# Локальная инфраструктура. Приложения — на хосте (make dev)
+# или в контейнерах (make dev-docker, профиль apps).
+
+name: test-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      MIGRATOR_PASSWORD: ${MIGRATOR_PASSWORD:-migrator}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:-app_user}
+    ports:
+      - '${DEV_POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d app']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - '${DEV_MAILPIT_SMTP_PORT:-1025}:1025'
+      - '${DEV_MAILPIT_UI_PORT:-8025}:8025'
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - '${DEV_MINIO_PORT:-9000}:9000'
+      - '${DEV_MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '${DEV_REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  caddy:
+    image: caddy:2.9-alpine
+    ports:
+      - '${DEV_HTTP_PORT:-8080}:8080'
+    environment:
+      API_UPSTREAM: ${API_UPSTREAM:-host.docker.internal:${PORT:-4000}}
+      WEB_UPSTREAM: ${WEB_UPSTREAM:-host.docker.internal:${WEB_PORT:-3000}}
+    volumes:
+      - ./infra/docker/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  # --- профиль apps: всё в Docker (CI) ---
+
+  api:
+    profiles: [apps]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    command: sh -c "node dist/db/migrate.js && node dist/main.js"
+    environment:
+      NODE_ENV: production
+      # dev-docker отдаёт сайт по http — Secure-куки браузер бы отверг
+      COOKIE_SECURE: 'false'
+      PORT: 3000
+      PUBLIC_URL: http://localhost:${DEV_HTTP_PORT:-8080}
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://app_user:${APP_USER_PASSWORD:-app_user}@postgres:5432/app
+      MIGRATE_DATABASE_URL: postgres://migrator:${MIGRATOR_PASSWORD:-migrator}@postgres:5432/app
+      EMAIL_FROM: no-reply@localhost
+      SMTP_URL: smtp://mailpit:1025
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: test
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_FORCE_PATH_STYLE: 'true'
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/health > /dev/null']
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  web:
+    profiles: [apps]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      PUBLIC_URL: http://localhost:${DEV_HTTP_PORT:-8080}
+      INTERNAL_API_URL: http://api:3000/api/v1
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/ > /dev/null']
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  worker:
+    profiles: [apps]
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.worker
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://app_user:${APP_USER_PASSWORD:-app_user}@postgres:5432/app
+    depends_on:
+      api:
+        condition: service_healthy
+
+  stripe-cli:
+    profiles: [stripe]
+    image: stripe/stripe-cli:latest
+    command: listen --forward-to ${STRIPE_FORWARD_TO:-host.docker.internal:${PORT:-4000}/api/v1/billing/webhook}
+    environment:
+      STRIPE_API_KEY: ${STRIPE_SECRET_KEY:-}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  # --- профиль observability: make observability, Grafana на :3001 ---
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:11.4.0
+    ports:
+      - '${DEV_GRAFANA_PORT:-3001}:3000'
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dev}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      ALERT_CHANNEL: ${ALERT_CHANNEL:-telegram}
+      # заглушки, чтобы Grafana поднималась без настроенных алертов
+      # (реальные значения приходят из .env / GitHub Environment)
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-0:placeholder}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-0}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-dev@localhost}
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.1.0
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+      - '--storage.tsdb.retention.size=2GB'
+      - '--web.enable-remote-write-receiver'
+    volumes:
+      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+
+  loki:
+    profiles: [observability]
+    image: grafana/loki:3.3.2
+    command: -config.file=/etc/loki/loki.yaml
+    volumes:
+      - ./infra/observability/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki_data:/loki
+
+  # экспортёры нужны и локально: дашборды PostgreSQL и Host & Docker
+  # должны показывать данные при make observability
+  # без монтирования корня: macOS Docker не умеет rslave. CPU/RAM видны (из /proc),
+  # панель «Диск» локально пустая — полный вариант работает в проде.
+  node-exporter:
+    profiles: [observability]
+    image: prom/node-exporter:v1.8.2
+
+  # на Docker Desktop (containerd image store) метрики без имён контейнеров —
+  # панели «по контейнерам» локально могут быть пустыми; в проде (Ubuntu) всё ок
+  cadvisor:
+    profiles: [observability]
+    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+  postgres-exporter:
+    profiles: [observability]
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    environment:
+      DATA_SOURCE_NAME: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/app?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  alloy:
+    profiles: [observability]
+    image: grafana/alloy:v1.6.1
+    command: run /etc/alloy/config.alloy --server.http.listen-addr=0.0.0.0:12345
+    environment:
+      SCRAPE_API_TARGET: host.docker.internal:${PORT:-4000}
+    ports:
+      - '${DEV_OTLP_PORT:-4318}:4318'
+    volumes:
+      - ./infra/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  pg_data:
+  minio_data:
+  grafana_data:
+  prom_data:
+  loki_data:

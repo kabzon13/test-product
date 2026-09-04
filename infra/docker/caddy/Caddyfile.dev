@@ -1,0 +1,12 @@
+# Локальный Caddy: http://localhost:8080
+# make dev        → приложения на хосте (host.docker.internal)
+# make dev-docker → приложения в контейнерах (API_UPSTREAM/WEB_UPSTREAM из окружения)
+
+:8080 {
+	handle /api/* {
+		reverse_proxy {$API_UPSTREAM:host.docker.internal:4000}
+	}
+	handle {
+		reverse_proxy {$WEB_UPSTREAM:host.docker.internal:3000}
+	}
+}

@@ -1,0 +1,27 @@
+# deps / build
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+
+# env & secrets
+.env
+.env.*
+!.env.example
+certs/
+
+# tests
+coverage/
+playwright-report/
+test-results/
+
+# terraform / tofu
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+crash.log
+
+# misc
+.DS_Store
+*.log

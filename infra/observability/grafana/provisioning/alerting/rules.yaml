@@ -1,0 +1,223 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: core
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: api-down
+        title: API недоступен
+        condition: B
+        for: 2m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: 'API не отвечает на /metrics (up == 0)'
+          runbook: 'docs/troubleshooting.md#api-недоступен'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: max(up{job="api"}) or vector(0)
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      - uid: web-down
+        title: Web-контейнер не запущен
+        condition: B
+        for: 2m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: 'Контейнер web не виден cAdvisor больше 2 минут'
+          runbook: 'docs/troubleshooting.md#web-недоступен'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: time() - max(container_last_seen{name=~".*web.*"})
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [120] }
+
+      - uid: http-5xx
+        title: Много 5xx
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: '5xx выше порога (0.5 rps) за 5 минут'
+          runbook: 'docs/troubleshooting.md#5xx'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(http_requests_total{status=~"5.."}[5m])) or vector(0)
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.5] }
+
+      - uid: p95-latency
+        title: p95 latency выше порога
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: 'p95 длительности запросов > 1s за 5 минут'
+          runbook: 'docs/troubleshooting.md#медленный-api'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+
+      - uid: disk-usage
+        title: Диск заполнен больше 85%
+        condition: B
+        for: 10m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: 'Свободного места на / меньше 15%'
+          runbook: 'docs/troubleshooting.md#диск'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: max(1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"})
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.85] }
+
+      - uid: postgres-down
+        title: PostgreSQL недоступен
+        condition: B
+        for: 2m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: 'postgres_exporter сообщает pg_up == 0'
+          runbook: 'docs/troubleshooting.md#postgresql'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: max(pg_up) or vector(0)
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      - uid: container-restarts
+        title: Контейнер в цикле рестартов
+        condition: B
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: 'Контейнер перезапускался больше 3 раз за 15 минут'
+          runbook: 'docs/troubleshooting.md#рестарты'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: max(changes(container_start_time_seconds{name!=""}[15m]))
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [3] }
+
+      - uid: cert-expiry
+        title: Сертификат скоро истечёт
+        condition: B
+        for: 1h
+        noDataState: OK
+        execErrState: OK
+        annotations:
+          summary: 'До истечения сертификата меньше 14 дней (метрика ssl_cert_expiry_seconds из cron)'
+          runbook: 'docs/troubleshooting.md#сертификат'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: min(ssl_cert_expiry_seconds) or vector(9000000000)
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 0, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1209600] }

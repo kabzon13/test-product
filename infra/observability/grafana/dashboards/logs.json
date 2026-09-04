@@ -1,0 +1,75 @@
+{
+  "uid": "app-logs",
+  "title": "Logs",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "service (container)",
+        "type": "custom",
+        "query": ".*,.*api.*,.*web.*,.*worker.*,.*caddy.*",
+        "current": { "text": ".*", "value": ".*" },
+        "options": []
+      },
+      {
+        "name": "level",
+        "label": "level (pino: 30=info 40=warn 50=error)",
+        "type": "custom",
+        "query": ".*,20,30,40,50,60",
+        "current": { "text": ".*", "value": ".*" },
+        "options": []
+      },
+      {
+        "name": "requestId",
+        "label": "requestId",
+        "type": "textbox",
+        "current": { "text": "", "value": "" },
+        "options": []
+      },
+      {
+        "name": "userId",
+        "label": "userId",
+        "type": "textbox",
+        "current": { "text": "", "value": "" },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "logs",
+      "title": "Логи",
+      "gridPos": { "h": 20, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"docker\", container=~\"$service\"} |= `$requestId` |= `$userId` | json | level =~ `$level` or __error__ != ``"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ошибки (level>=50) по контейнерам",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (container) (count_over_time({job=\"docker\"} | json | level=~\"(5|6)[0-9]\" [5m]))"
+        }
+      ]
+    }
+  ]
+}

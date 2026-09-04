@@ -1,0 +1,47 @@
+#cloud-config
+# Bootstrap дроплета. Подставляется terraform (templatefile).
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose-v2
+  - unattended-upgrades
+  - chrony
+  - curl
+
+users:
+  - name: deploy
+    groups: [docker]
+    shell: /bin/bash
+    sudo: 'ALL=(ALL) NOPASSWD:ALL'
+    ssh_authorized_keys:
+      - no-agent-forwarding,no-X11-forwarding,no-pty ${ssh_public_key}
+
+write_files:
+  # log rotation для контейнеров
+  - path: /etc/docker/daemon.json
+    content: |
+      { "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "3" } }
+
+  # cron: uptime-ping (pull-модель), pg_dump в Spaces, метрика срока сертификата.
+  # Скрипты приезжают с первым деплоем в /opt/app/scripts — до этого cron молча выходит.
+  - path: /etc/cron.d/app
+    content: |
+      SHELL=/bin/bash
+      * * * * * deploy [ -x /opt/app/scripts/uptime-ping.sh ] && /opt/app/scripts/uptime-ping.sh >/dev/null 2>&1
+      17 3 * * * deploy [ -x /opt/app/scripts/db-backup.sh ] && /opt/app/scripts/db-backup.sh >> /var/log/db-backup.log 2>&1
+      */15 * * * * root [ -x /opt/app/scripts/cert-metric.sh ] && /opt/app/scripts/cert-metric.sh >/dev/null 2>&1
+
+runcmd:
+  - mkdir -p /opt/app/certs /opt/app/caddy /opt/app/scripts /var/lib/node_exporter/textfile
+  - chown -R deploy:deploy /opt/app
+  # swap 2 ГБ — защита от OOM при пиках
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  - systemctl enable --now chrony
+  - systemctl restart docker

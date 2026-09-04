@@ -1,0 +1,185 @@
+# Production/staging compose. Запускается деплоем на сервере из /opt/app.
+# Образы: immutable tag = git SHA (рендерится в .env деплоем).
+# Staging: PostgreSQL в контейнере — COMPOSE_PROFILES=local-db в staging .env.
+
+name: test
+
+services:
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    ports:
+      - '443:443'
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - api
+
+  web:
+    image: ${WEB_IMAGE}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: 3000
+      INTERNAL_API_URL: http://api:3000/api/v1
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/ > /dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: 3000
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/health > /dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # одноразовый контейнер миграций: docker compose run --rm migrate
+  migrate:
+    profiles: [migrate]
+    image: ${API_IMAGE}
+    command: node dist/db/migrate.js
+    env_file: .env
+
+  worker:
+    image: ${WORKER_IMAGE}
+    restart: unless-stopped
+    env_file: .env
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  # staging: БД в контейнере (COMPOSE_PROFILES=local-db). Бэкапов нет намеренно.
+  postgres:
+    profiles: [local-db]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MIGRATOR_PASSWORD: ${MIGRATOR_PASSWORD:-}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:-}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d app']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # --- Observability (Core, всегда включён на staging/prod) ---
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    # наружу не смотрит: доступ через SSH-туннель (docs/access.md)
+    ports:
+      - '127.0.0.1:3001:3000'
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      ALERT_CHANNEL: ${ALERT_CHANNEL:-telegram}
+      # заглушки, чтобы Grafana поднималась без настроенных алертов
+      # (реальные значения приходят из .env / GitHub Environment)
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-0:placeholder}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-0}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-dev@localhost}
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+      - '--storage.tsdb.retention.size=4GB'
+      - '--web.enable-remote-write-receiver'
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+
+  loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yaml
+    volumes:
+      - ./observability/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki_data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.6.1
+    restart: unless-stopped
+    command: run /etc/alloy/config.alloy --server.http.listen-addr=0.0.0.0:12345
+    environment:
+      SCRAPE_API_TARGET: api:3000
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    pid: host
+    command:
+      - '--path.rootfs=/host'
+      # cert-metric.sh (cron) пишет ssl_cert_expiry_seconds сюда
+      - '--collector.textfile.directory=/host/var/lib/node_exporter/textfile'
+    volumes:
+      - /:/host:ro,rslave
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: ${DATABASE_URL}
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: ['-config.file=/etc/tempo/tempo.yaml']
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/var/tempo
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pg_data:
+  grafana_data:
+  prom_data:
+  loki_data:
+  redis_data:
+  tempo_data:

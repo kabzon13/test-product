@@ -1,0 +1,8 @@
+node_modules
+dist
+.next
+coverage
+pnpm-lock.yaml
+packages/api-client/openapi.json
+packages/api-client/src/types.ts
+infra/observability/grafana/dashboards

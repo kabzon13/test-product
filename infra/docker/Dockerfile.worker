@@ -1,0 +1,26 @@
+FROM node:24.6.0-alpine AS build
+RUN corepack enable
+WORKDIR /repo
+
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY apps/worker/package.json apps/worker/
+COPY packages/config/package.json packages/config/
+COPY packages/tsconfig/package.json packages/tsconfig/
+COPY packages/eslint-config/package.json packages/eslint-config/
+COPY packages/api-client/package.json packages/api-client/
+RUN pnpm install --frozen-lockfile --filter "@test/worker..."
+
+COPY packages ./packages
+COPY apps/worker ./apps/worker
+RUN pnpm --filter @test/config build && pnpm --filter @test/worker build
+RUN pnpm --filter @test/worker deploy --prod /out
+
+FROM node:24.6.0-alpine AS runtime
+ENV NODE_ENV=production
+ARG GIT_SHA=local
+ENV GIT_SHA=$GIT_SHA
+RUN addgroup -S app && adduser -S app -G app
+WORKDIR /app
+COPY --from=build --chown=app:app /out ./
+USER app
+CMD ["node", "dist/main.js"]

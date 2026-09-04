@@ -1,0 +1,25 @@
+name: rollback
+
+# Rollback вручную: выбираете SHA, запускаете.
+# Миграции expand/contract — откат кода не требует отката схемы.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Окружение
+        required: true
+        type: choice
+        options: [staging, production]
+      sha:
+        description: git SHA, на который откатиться
+        required: true
+        type: string
+
+jobs:
+  rollback:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: ${{ inputs.environment }}
+      sha: ${{ inputs.sha }}
+    secrets: inherit
