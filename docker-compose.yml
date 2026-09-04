@@ -52,6 +52,10 @@ services:
     image: ${API_IMAGE}
     command: node dist/db/migrate.js
     env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
 
   worker:
     image: ${WORKER_IMAGE}
