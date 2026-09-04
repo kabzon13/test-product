@@ -12,7 +12,10 @@
 
 # Запасной вход по IP: работает до появления домена и как обходной путь мимо Cloudflare.
 # Снаружи его прикрывает firewall (admin_ips). tls internal = самоподписанный сертификат.
-:443 {
+# Адреса перечислены явно: internal-CA выпускает сертификаты на старте
+# (catch-all :443 без имён не имеет сертификата — TLS-alert 80).
+# DROPLET_IP приходит из .env (рендерится деплоем).
+https://localhost, https://127.0.0.1, https://{$DROPLET_IP:host.invalid} {
 	encode gzip
 	# health API для uptime-cron (сам /health не под /api/*)
 	handle /healthz {
