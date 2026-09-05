@@ -30,7 +30,9 @@ fi
 cat > .env.images <<EOF
 WEB_IMAGE=$IMAGE_PREFIX-web:$SHA
 API_IMAGE=$IMAGE_PREFIX-api:$SHA
+# <module:queue>
 WORKER_IMAGE=$IMAGE_PREFIX-worker:$SHA
+# </module:queue>
 EOF
 
 compose() {
@@ -58,6 +60,10 @@ compose run --rm migrate || rollback
 
 echo "→ up -d"
 compose up -d --remove-orphans
+
+# Caddyfile — bind mount: up -d не замечает смену содержимого файла
+echo "→ caddy reload"
+compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || compose restart caddy
 
 echo "→ ждём /health (до 60с)"
 for i in $(seq 1 30); do
